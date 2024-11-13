@@ -5,66 +5,36 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from .serializers import ScraperSerializer
+from .services.scraper_service import ContentParser
 
 
 class ScraperView(APIView):
+
     def post(self, request):
         serializer = ScraperSerializer(data=request.data)
         if serializer.is_valid():
             url = serializer.validated_data['url']
-            response = requests.get(url)
+            title_xpath = serializer.validated_data['title_xpath']
+            description_xpath = serializer.validated_data['description_xpath']
+            image_xpath = serializer.validated_data['image_xpath']
 
-            if response.status_code != 200:
-                return Response({'error': 'Failed to retrieve the URL'},
-                                status=status.HTTP_400_BAD_REQUEST)
+            scraper = ContentParser(url)
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            try:
+                # Scrape all items and get them as structured data
+                data = scraper.scrape_items(title_xpath, description_xpath, image_xpath)
 
-            # Extract the data
-            data = []
-            item_data = {'url': url}
-            titles = soup.find_all(['h1', 'h2', 'div','meta'],
-                                   class_=lambda class_name: class_name and 'title' in class_name)
-            for title in titles:
-                title_text = title.get_text(strip=True)
-                if title_text:
-                    item_data['title'] = title_text
+                # Save to CSV and Excel
+                csv_file = scraper.save_to_csv(data)
+                excel_file = scraper.save_to_excel(data)
 
-            descriptions = soup.find_all(['p', 'span', 'div','meta'],
-                                         class_=lambda class_name: class_name and 'description' in class_name)
-            for desc in descriptions:
-                desc_text = desc.get_text(strip=True)
-                if desc_text:
-                    item_data['description'] = desc_text
+                # Return paths to the saved files
+                return Response({
+                    'csv_file': csv_file,
+                    'excel_file': excel_file
+                }, status=status.HTTP_200_OK)
 
-            prices = soup.find_all(class_=lambda class_name: class_name and 'price' in class_name)
-            for price in prices:
-                price_text = price.get_text(strip=True)
-                if price_text:
-                    item_data['price'] = price_text
-
-            images = soup.find_all('img', src=True)
-            for img in images:
-                img_src = img['src']
-                if img_src:
-                    item_data['image'] = img_src
-
-            data.append(item_data)
-
-            # Convert the data into a DataFrame and export to CSV or Excel
-            df = pd.DataFrame(data)
-
-            # Save to CSV
-            csv_path = 'scraped_data.csv'
-            df.to_csv(csv_path, index=False)
-
-            # Save to Excel
-            excel_path = 'scraped_data.xlsx'
-            df.to_excel(excel_path, index=False)
-
-            return Response({
-                'csv_file': csv_path,
-                'excel_file': excel_path
-            }, status=status.HTTP_200_OK)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
